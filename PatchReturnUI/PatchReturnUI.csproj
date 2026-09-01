@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>PatchReturnUI</AssemblyName>
+    <RootNamespace>PatchReturnUI</RootNamespace>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="dnlib" Version="4.4.0" />
+  </ItemGroup>
+
+</Project>

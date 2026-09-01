@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>PatchReturnUINative</RootNamespace>
+    <AssemblyName>PatchReturnUINative</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="dnlib" Version="4.4.0" />
+  </ItemGroup>
+</Project>
