@@ -1,10 +1,10 @@
-# NoMosaic
+# UnMosic
 
 > .NET 游戏马赛克去除 / Return 值修改器 — 基于 dnlib（dnSpy 底层库）实现 IL 字节级原位修改
 
 ## 简介
 
-**NoMosaic** 是一款专为去除 .NET 游戏马赛克而生的工具，核心能力是定位指定函数的最后一个 `ret` 指令，原位修改其前面的取值指令，让方法返回你指定的值。
+**UnMosic** 是一款专为去除 .NET 游戏马赛克而生的工具，核心能力是定位指定函数的最后一个 `ret` 指令，原位修改其前面的取值指令，让方法返回你指定的值。
 
 典型用途：绕过游戏中的马赛克绘制逻辑（关闭 `FnDrawMosaic`、`DrawMosaic` 等返回 `false`），也可用于任何需要修改 .NET 方法返回值的场景（调试、解锁、补丁等）。
 
@@ -30,9 +30,9 @@
   - 按相关度排序，强关键词 ★ 标记
   - 选中后自动套用 DLL/函数/类型，并按返回类型推荐补丁值
 
-## 使用方式（仅 GUI 版维护）
+## 使用方式
 
-### 🪟 NoMosaic GUI — `PatchReturnUI.exe`
+### 🪟 UnMosic GUI — `PatchReturnUI.exe`
 
 WinForms 图形界面，所有功能按钮化，适合不熟悉命令行的用户。
 
@@ -45,15 +45,6 @@ WinForms 图形界面，所有功能按钮化，适合不熟悉命令行的用�
 
 体积约 177 MB（含完整 .NET 8 + WinForms 运行时，双击即用，无依赖）。
 
-### ⚠️ 已停止维护的版本
-
-以下两个历史版本仍保留在仓库中以供参考，但**不再更新**，请改用 GUI 版：
-
-| 版本 | 可执行文件 | 状态 |
-|------|-----------|------|
-| 命令行版 | `PatchReturn.exe` | 🛑 已停止维护 |
-| 数字菜单 CMD 版 | `PatchReturnUINative.exe` | 🛑 已停止维护 |
-
 ## 构建方法
 
 ### 前置依赖
@@ -64,13 +55,11 @@ WinForms 图形界面，所有功能按钮化，适合不熟悉命令行的用�
 
 ### 项目结构
 
-| 项目 | 目标框架 | 输出类型 | 维护状态 |
-|------|---------|---------|---------|
-| `PatchReturnUI/PatchReturnUI.csproj` | `net8.0-windows` | WinExe | ✅ 维护中 |
-| `PatchReturn/PatchReturn.csproj` | `net8.0` | Exe | 🛑 已停止 |
-| `PatchReturnUINative/PatchReturnUINative.csproj` | `net8.0` | Exe | 🛑 已停止 |
+| 项目 | 目标框架 | 输出类型 |
+|------|---------|---------|
+| `PatchReturnUI/PatchReturnUI.csproj` | `net8.0-windows` | WinExe |
 
-### 发布 GUI 版单文件独立 exe
+### 发布为单文件独立 exe
 
 ```powershell
 dotnet publish PatchReturnUI/PatchReturnUI.csproj -c Release -r win-x64 --self-contained true `
@@ -82,7 +71,7 @@ dotnet publish PatchReturnUI/PatchReturnUI.csproj -c Release -r win-x64 --self-c
 
 ## 工作原理
 
-NoMosaic 修补一个方法返回值的步骤：
+UnMosic 修补一个方法返回值的步骤：
 
 1. 用 `ModuleDefMD.Load` 从字节数组加载目标 DLL（避开文件锁）
 2. 遍历所有类型所有方法，按名字 + 可选类型过滤匹配目标
@@ -104,11 +93,11 @@ NoMosaic 修补一个方法返回值的步骤：
 bool FnDrawMosaic(...) {
     if (someCondition) return true;   // 早返回
     DoSomething();
-    return true;                       // 主返回 ← NoMosaic 改的就是这条
+    return true;                       // 主返回 ← UnMosic 改的就是这条
 }
 ```
 
-NoMosaic 只修改最后一个 `ret` 之前的取值，**保留**所有早返回分支的原逻辑。
+UnMosic 只修改最后一个 `ret` 之前的取值，**保留**所有早返回分支的原逻辑。
 对于"主路径"返回值的修改，这正是你想要的精确语义。
 
 ### 自动扫描关键词表
@@ -135,23 +124,13 @@ NoMosaic 只修改最后一个 `ret` 之前的取值，**保留**所有早返回
 ## 项目结构
 
 ```
-NoMosaic/
-├── PatchReturnUI/               # ✅ WinForms GUI 版（维护中）
+UnMosic/
+├── PatchReturnUI/               # WinForms GUI 版
 │   ├── PatchReturnUI.csproj
-│   ├── Program.cs              # 入口
-│   ├── MainForm.cs             # 主窗口 + 扫描结果窗体
-│   ├── Patcher.cs              # 修补引擎
-│   └── Preset.cs               # 预设数据
-│
-├── PatchReturn/                # 🛑 命令行版（已停止维护）
-│   ├── PatchReturn.csproj
-│   └── Program.cs
-│
-├── PatchReturnUINative/        # 🛑 数字菜单 CMD 版（已停止维护）
-│   ├── PatchReturnUINative.csproj
-│   ├── Program.cs
-│   ├── Patcher.cs
-│   └── Preset.cs
+│   ├── Program.cs               # 入口
+│   ├── MainForm.cs              # 主窗口 + 扫描结果窗体
+│   ├── Patcher.cs               # 修补引擎
+│   └── Preset.cs                # 预设数据
 │
 ├── .gitignore
 ├── LICENSE
