@@ -11,6 +11,9 @@ internal static class Program
     private static string? _typeFilter = null;
     private static List<Preset> _presets = new();
 
+    // 扫描结果缓存(供编号选择)
+    private static List<ScanHit> _scanResults = new();
+
     private static void Main()
     {
         Console.Title = "PatchReturn - dnlib 内核";
@@ -38,6 +41,10 @@ internal static class Program
             }
             try
             {
+                // 编号形式: 直接选扫描结果
+                if (line.StartsWith("s", StringComparison.OrdinalIgnoreCase) && int.TryParse(line.AsSpan(1), out int sIdx))
+                { ChooseScanResult(sIdx); continue; }
+
                 switch (line)
                 {
                     case "1": ChooseDll(); break;
@@ -49,6 +56,7 @@ internal static class Program
                     case "7": Restore(); break;
                     case "8": ListFunc(); break;
                     case "9": EditPresets(); break;
+                    case "a" or "A": ScanFolder(); break;
                     case "h" or "H" or "?": ShowHelp(); break;
                     default:
                         if (int.TryParse(line, out _) == false && line.Length > 0)
@@ -80,6 +88,8 @@ internal static class Program
         Console.WriteLine($"  函数名   : {(string.IsNullOrEmpty(_funcName) ? "(未填)" : _funcName)}");
         Console.WriteLine($"  返回值   : {(string.IsNullOrEmpty(_valueStr) ? "(未填)" : _valueStr)}");
         Console.WriteLine($"  类型过滤 : {_typeFilter ?? "(无)"}");
+        if (_scanResults.Count > 0)
+            Console.WriteLine($"  扫描候选 : {_scanResults.Count} 条 (用 s<编号> 选, 如 s0)");
         Console.WriteLine("──────────────────────────────────");
     }
 
@@ -95,6 +105,7 @@ internal static class Program
         Console.WriteLine("  [7] 还原备份 (.bak)");
         Console.WriteLine("  [8] 列出函数 (查同名)");
         Console.WriteLine("  [9] 编辑预设 (记事本打开)");
+        Console.WriteLine("  [a] 自动扫描文件夹 (查所有候选函数) ★");
         Console.WriteLine("  [h] 帮助");
         Console.WriteLine("  [0] 退出");
     }
@@ -109,6 +120,8 @@ internal static class Program
         Console.WriteLine("5. 类型过滤: 如多个同名方法, 填声明类型全名");
         Console.WriteLine("6. 修补: 自动备份 .bak -> 替换最后一个 ret 前的取值");
         Console.WriteLine("7. 还原: 用 .bak 覆盖回原 DLL");
+        Console.WriteLine("a. 扫描文件夹: 遍历所有 .dll, 用关键词匹配马赛克候选函数");
+        Console.WriteLine("   扫描后用 s<编号> (如 s0) 一键套用候选到当前状态");
         Console.WriteLine("─────────────────");
     }
 
@@ -247,6 +260,203 @@ internal static class Program
             Log("[*] 编辑保存后, 重启本工具以重新加载预设");
         }
         catch (Exception ex) { LogErr("打开失败: " + ex.Message); }
+    }
+
+    // ---------- 自动扫描 ----------
+    /// <summary>扫描结果记录</summary>
+    private sealed class ScanHit
+    {
+        public string DllPath = "";
+        public string TypeName = "";
+        public string MethodName = "";
+        public string ReturnType = "";
+        public bool IsStatic;
+        public int Score;       // 关键词相关度
+        public string MatchedKeyword = "";
+    }
+
+    /// <summary>马赛克/审查相关关键词(小写比较)</summary>
+    private static readonly string[] _mosaicKeywords =
+    {
+        "mosaic", "censor", "blur", "pixelat", "obscure",
+        "drawgl", "draw_gl", "hider", "hiding",
+        "mask", "coverup", "shade", "steam",
+        "blackbar", "pixe", "fog", "veil"
+    };
+
+    /// <summary>强相关关键词(高分)</summary>
+    private static readonly string[] _strongKeywords =
+    {
+        "mosaic", "censor", "drawglonly", "draw_gl_only",
+        "fndrawmosaic", "drawmosaic", "getmosaicsize",
+        "mosaicshower", "mosaicenabled", "isdrawmosaic"
+    };
+
+    private static void ScanFolder()
+    {
+        Console.Write("输入文件夹路径 (或拖文件夹到窗口): ");
+        string? folder = Console.ReadLine()?.Trim().Trim('"');
+        if (string.IsNullOrEmpty(folder)) { LogErr("未输入"); return; }
+        if (!Directory.Exists(folder)) { LogErr($"文件夹不存在: {folder}"); return; }
+
+        Console.Write("递归扫描子目录? (y/N): ");
+        bool recurse = Console.ReadLine()?.Trim().ToLower() == "y";
+
+        var searchOption = recurse ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+        string[] dlls;
+        try { dlls = Directory.GetFiles(folder, "*.dll", searchOption); }
+        catch (Exception ex) { LogErr($"枚举文件失败: {ex.Message}"); return; }
+
+        if (dlls.Length == 0) { LogErr($"未找到 .dll 文件: {folder}"); return; }
+
+        Log($"[*] 开始扫描 {dlls.Length} 个 DLL (递归={recurse})");
+        Log("");
+
+        _scanResults.Clear();
+        int scanned = 0, failed = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        foreach (var dll in dlls)
+        {
+            string shortName = Path.GetFileName(dll);
+            Console.Write($"[扫描 {++scanned}/{dlls.Length}] {shortName,-50} ... ");
+
+            List<ScanHit> hits = new();
+            try
+            {
+                var module = dnlib.DotNet.ModuleDefMD.Load(File.ReadAllBytes(dll));
+                foreach (var type in module.GetTypes())
+                foreach (var m in type.Methods)
+                {
+                    if (!m.HasBody || m.Body is null) continue;
+                    string mn = m.Name.String ?? "";
+                    if (mn.Length == 0 || mn.StartsWith("get_", StringComparison.Ordinal) == false &&
+                        mn.StartsWith("set_", StringComparison.Ordinal) == false &&
+                        mn.Length < 3) continue;
+
+                    string mnLower = mn.ToLowerInvariant();
+                    string tnLower = (type.Name.String ?? "").ToLowerInvariant();
+
+                    int score = 0;
+                    string matched = "";
+                    // 强关键词
+                    foreach (var k in _strongKeywords)
+                    {
+                        if (mnLower.Contains(k) || tnLower.Contains(k))
+                        {
+                            score += 100;
+                            matched = k;
+                            break;
+                        }
+                    }
+                    // 普通关键词
+                    foreach (var k in _mosaicKeywords)
+                    {
+                        if (mnLower.Contains(k) || tnLower.Contains(k))
+                        {
+                            score += 50;
+                            matched = string.IsNullOrEmpty(matched) ? k : matched + "+" + k;
+                            if (score >= 100) break;
+                        }
+                    }
+                    if (score == 0) continue;
+
+                    // 跳过 void 返回(无法改 ret 取值)
+                    if (m.ReturnType.FullName == "System.Void") continue;
+
+                    hits.Add(new ScanHit
+                    {
+                        DllPath = dll,
+                        TypeName = type.FullName,
+                        MethodName = mn,
+                        ReturnType = m.ReturnType.FullName,
+                        IsStatic = m.IsStatic,
+                        Score = score,
+                        MatchedKeyword = matched
+                    });
+                }
+                module.Dispose();
+            }
+            catch
+            {
+                failed++;
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine("跳过 (非 .NET 或读取失败)");
+                Console.ResetColor();
+                continue;
+            }
+
+            if (hits.Count == 0)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine("无匹配");
+                Console.ResetColor();
+                continue;
+            }
+
+            // 按相关度排序
+            hits.Sort((a, b) => b.Score.CompareTo(a.Score));
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"匹配 {hits.Count} 个");
+            Console.ResetColor();
+            foreach (var h in hits)
+            {
+                int idx = _scanResults.Count;
+                _scanResults.Add(h);
+                string star = h.Score >= 100 ? "★" : " ";
+                Console.WriteLine($"    {star}[s{idx}] {h.MethodName} - {h.TypeName}");
+                Console.WriteLine($"           返回 {h.ReturnType} 静态={h.IsStatic} 关键词={h.MatchedKeyword}");
+            }
+        }
+
+        sw.Stop();
+        Console.WriteLine();
+        Console.WriteLine("═══════════════════════════════════════════");
+        Console.WriteLine($"[*] 扫描完成: 耗时 {sw.Elapsed.TotalSeconds:F1}s, 扫描 {scanned} 个, 失败 {failed} 个");
+        Console.WriteLine($"[*] 共找到 {_scanResults.Count} 个候选函数");
+        if (_scanResults.Count > 0)
+        {
+            Console.WriteLine($"[*] 用 s<编号> 选候选 (如 s0), 自动填入 DLL/函数名/类型过滤");
+            Console.WriteLine($"[*] 然后选预设或手动填返回值, 最后按 [6] 修补");
+        }
+        Console.WriteLine("═══════════════════════════════════════════");
+    }
+
+    private static void ChooseScanResult(int idx)
+    {
+        if (_scanResults.Count == 0) { LogErr("无扫描结果, 请先按 [a] 扫描"); return; }
+        if (idx < 0 || idx >= _scanResults.Count) { LogErr($"编号超出范围 [0-{_scanResults.Count - 1}]"); return; }
+
+        var hit = _scanResults[idx];
+        _dllPath = hit.DllPath;
+        _funcName = hit.MethodName;
+        _typeFilter = hit.TypeName;
+
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine($"[+] 已套用扫描结果 s{idx}:");
+        Console.ResetColor();
+        Console.WriteLine($"    DLL    : {hit.DllPath}");
+        Console.WriteLine($"    函数  : {hit.MethodName}");
+        Console.WriteLine($"    类型  : {hit.TypeName}");
+        Console.WriteLine($"    返回  : {hit.ReturnType} 静态={hit.IsStatic}");
+        Console.WriteLine($"    匹配  : {hit.MatchedKeyword} (相关度={hit.Score})");
+
+        // 自动推荐返回值
+        if (string.IsNullOrEmpty(_valueStr) && hit.ReturnType == "System.Boolean")
+        {
+            _valueStr = "false";
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("[*] 已自动填入返回值 false (Boolean 类型, 推断为关闭马赛克)");
+            Console.ResetColor();
+        }
+        else if (string.IsNullOrEmpty(_valueStr) && hit.ReturnType == "System.Single")
+        {
+            _valueStr = "0.01f";
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("[*] 已自动填入返回值 0.01f (Single 类型, 推断为最小化)");
+            Console.ResetColor();
+        }
+        Console.WriteLine("[*] 现在按 [6] 修补, 或先按 [4] 改返回值");
     }
 
     // ---------- 日志辅助 ----------

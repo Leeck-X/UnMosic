@@ -1,14 +1,12 @@
-# UnMosic
+# NoMosaic
 
 > .NET 游戏马赛克去除 / Return 值修改器 — 基于 dnlib（dnSpy 底层库）实现 IL 字节级原位修改
 
 ## 简介
 
-UnMosic 是一个用于修改 .NET 程序集（特别是 Unity 游戏的 `Assembly-CSharp.dll`）方法返回值的工具。
-它的核心能力是定位指定函数的最后一个 `ret` 指令，原位修改其前面的取值指令，从而让方法返回你指定的值。
+**NoMosaic** 是一款专为去除 .NET 游戏马赛克而生的工具，核心能力是定位指定函数的最后一个 `ret` 指令，原位修改其前面的取值指令，让方法返回你指定的值。
 
-典型用途是绕过游戏中的马赛克绘制逻辑（关闭 `FnDrawMosaic`、`DrawMosaic` 等返回 `false`），
-也可用于任何需要修改 .NET 方法返回值的场景（调试、解锁、补丁等）。
+典型用途：绕过游戏中的马赛克绘制逻辑（关闭 `FnDrawMosaic`、`DrawMosaic` 等返回 `false`），也可用于任何需要修改 .NET 方法返回值的场景（调试、解锁、补丁等）。
 
 > ⚠️ 本工具仅供学习与研究 .NET IL 修改技术使用。请在合法授权范围内使用，不要用于侵犯他人版权或绕过 DRM 的活动。
 
@@ -25,47 +23,36 @@ UnMosic 是一个用于修改 .NET 程序集（特别是 Unity 游戏的 `Assemb
 - **临时文件策略**：先写临时文件，确认成功后再覆盖原 DLL，避免文件句柄占用导致损坏
 - **预设系统**：内置 8 条常见马赛克补丁预设，`presets.json` 可用记事本编辑后重启生效
 - **同名方法消歧**：支持 `类型过滤` 参数，按声明类型全名（或 `.类型名` 后缀）过滤
+- **🔍 自动扫描**：浏览游戏文件夹，遍历所有 `.dll` 自动识别候选马赛克函数
+  - 强关键词命中（`mosaic`、`censor`、`drawglonly` 等）100 分
+  - 普通关键词命中（`blur`、`pixelat`、`hider`、`mask` 等）50 分
+  - 跳过非 .NET 程序集与 `void` 返回方法
+  - 按相关度排序，强关键词 ★ 标记
+  - 选中后自动套用 DLL/函数/类型，并按返回类型推荐补丁值
 
-## 三种使用方式
+## 使用方式（仅 GUI 版维护）
 
-### 1. 数字菜单 CMD（推荐入门）— `PatchReturnUINative.exe`
-
-交互式数字菜单，无需记参数。双击 exe 启动后按提示操作：
-
-```
-> 1   选择 DLL 路径 (可拖文件到窗口)
-> 2   选择预设 (1=FnDrawMosaic, 2=DrawMosaic, ...)
-> 6   修补 DLL
-> 7   还原备份
-> 0   退出
-```
-
-体积约 81 MB（含 .NET 8 运行时 + dnlib），双击即用，无依赖。
-
-### 2. 命令行 — `PatchReturn.exe`
-
-一行命令完成修补，适合批处理脚本：
-
-```cmd
-PatchReturn.exe <DLL路径> <函数名> <返回值> [类型过滤]
-```
-
-示例：
-
-```cmd
-PatchReturn.exe "C:\Game\Assembly-CSharp.dll" FnDrawMosaic false
-PatchReturn.exe "C:\Game\Assembly-CSharp.dll" GetMosaicSize 0.01f
-PatchReturn.exe "C:\Game\Assembly-CSharp.dll" get_DrawGlOnly false MosaicShower
-```
-
-体积约 81 MB。
-
-### 3. GUI 窗口 — `PatchReturnUI.exe`
+### 🪟 NoMosaic GUI — `PatchReturnUI.exe`
 
 WinForms 图形界面，所有功能按钮化，适合不熟悉命令行的用户。
-支持拖放 DLL、预设下拉框、彩色状态栏、可滚动日志区。
 
-体积约 177 MB（因包含完整 WinForms 运行时）。
+- 拖放 / 浏览选择 DLL
+- 预设下拉框一键填入
+- **🔍 扫描文件夹** 按钮：自动遍历游戏目录所有 .dll，识别马赛克相关函数
+- 双击扫描结果即可套用，按返回类型自动推荐补丁值
+- 彩色状态栏 + 可滚动日志区
+- 支持备份 / 一键还原
+
+体积约 177 MB（含完整 .NET 8 + WinForms 运行时，双击即用，无依赖）。
+
+### ⚠️ 已停止维护的版本
+
+以下两个历史版本仍保留在仓库中以供参考，但**不再更新**，请改用 GUI 版：
+
+| 版本 | 可执行文件 | 状态 |
+|------|-----------|------|
+| 命令行版 | `PatchReturn.exe` | 🛑 已停止维护 |
+| 数字菜单 CMD 版 | `PatchReturnUINative.exe` | 🛑 已停止维护 |
 
 ## 构建方法
 
@@ -75,38 +62,27 @@ WinForms 图形界面，所有功能按钮化，适合不熟悉命令行的用�
 - Windows 10/11 / Windows Server 2019+ （x64）
 - 任意代码编辑器（VSCode / Visual Studio / Rider / 记事本均可）
 
-### 三个项目
+### 项目结构
 
-| 项目 | 目标框架 | 输出类型 | 用途 |
-|------|---------|---------|------|
-| `PatchReturn/PatchReturn.csproj` | `net8.0` | Exe | 命令行版 |
-| `PatchReturnUINative/PatchReturnUINative.csproj` | `net8.0` | Exe | 数字菜单 CMD 版 |
-| `PatchReturnUI/PatchReturnUI.csproj` | `net8.0-windows` | WinExe | WinForms GUI 版 |
+| 项目 | 目标框架 | 输出类型 | 维护状态 |
+|------|---------|---------|---------|
+| `PatchReturnUI/PatchReturnUI.csproj` | `net8.0-windows` | WinExe | ✅ 维护中 |
+| `PatchReturn/PatchReturn.csproj` | `net8.0` | Exe | 🛑 已停止 |
+| `PatchReturnUINative/PatchReturnUINative.csproj` | `net8.0` | Exe | 🛑 已停止 |
 
-### 发布为单文件独立 exe
+### 发布 GUI 版单文件独立 exe
 
 ```powershell
-# 命令行版 (~81 MB)
-dotnet publish PatchReturn/PatchReturn.csproj -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:IncludeAllContentForSelfExtract=true -o .\dist
-
-# 数字菜单 CMD 版 (~81 MB)
-dotnet publish PatchReturnUINative/PatchReturnUINative.csproj -c Release -r win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:IncludeAllContentForSelfExtract=true -o .\dist
-
-# WinForms GUI 版 (~177 MB)
 dotnet publish PatchReturnUI/PatchReturnUI.csproj -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
     -p:IncludeAllContentForSelfExtract=true -o .\dist
 ```
 
-发布后所有 exe 出现在 `dist/` 目录，可单独拷贝分发。
+发布后 `dist/PatchReturnUI.exe` 可单独拷贝分发，目标机无需安装 .NET 运行时。
 
 ## 工作原理
 
-UnMosic 修补一个方法返回值的步骤：
+NoMosaic 修补一个方法返回值的步骤：
 
 1. 用 `ModuleDefMD.Load` 从字节数组加载目标 DLL（避开文件锁）
 2. 遍历所有类型所有方法，按名字 + 可选类型过滤匹配目标
@@ -128,12 +104,19 @@ UnMosic 修补一个方法返回值的步骤：
 bool FnDrawMosaic(...) {
     if (someCondition) return true;   // 早返回
     DoSomething();
-    return true;                       // 主返回 ← UnMosic 改的就是这条
+    return true;                       // 主返回 ← NoMosaic 改的就是这条
 }
 ```
 
-UnMosic 只修改最后一个 `ret` 之前的取值，**保留**所有早返回分支的原逻辑。
+NoMosaic 只修改最后一个 `ret` 之前的取值，**保留**所有早返回分支的原逻辑。
 对于"主路径"返回值的修改，这正是你想要的精确语义。
+
+### 自动扫描关键词表
+
+| 类型 | 关键词 | 分值 |
+|------|--------|------|
+| 强相关 | `mosaic` `censor` `drawglonly` `draw_gl_only` `fndrawmosaic` `drawmosaic` `getmosaicsize` `mosaicshower` `mosaicenabled` `isdrawmosaic` | 100 |
+| 普通相关 | `blur` `pixelat` `obscure` `drawgl` `draw_gl` `hider` `hiding` `mask` `coverup` `shade` `steam` `blackbar` `pixe` `fog` `veil` | 50 |
 
 ## 依赖与致谢
 
@@ -152,23 +135,23 @@ UnMosic 只修改最后一个 `ret` 之前的取值，**保留**所有早返回�
 ## 项目结构
 
 ```
-UnMosic/
-├── PatchReturn/                 # 命令行版
-│   ├── PatchReturn.csproj
-│   └── Program.cs               # 入口 + Patcher 内联实现
-│
-├── PatchReturnUINative/         # 数字菜单 CMD 版
-│   ├── PatchReturnUINative.csproj
-│   ├── Program.cs               # 数字菜单交互循环
-│   ├── Patcher.cs               # 修补引擎（与 PatchReturnUI 共享逻辑）
-│   └── Preset.cs                # 预设数据 + presets.json 加载
-│
-├── PatchReturnUI/               # WinForms GUI 版
+NoMosaic/
+├── PatchReturnUI/               # ✅ WinForms GUI 版（维护中）
 │   ├── PatchReturnUI.csproj
-│   ├── Program.cs               # 入口
-│   ├── MainForm.cs              # 主窗口（绝对定位 + Anchor 缩放）
-│   ├── Patcher.cs               # 修补引擎
-│   └── Preset.cs                # 预设数据
+│   ├── Program.cs              # 入口
+│   ├── MainForm.cs             # 主窗口 + 扫描结果窗体
+│   ├── Patcher.cs              # 修补引擎
+│   └── Preset.cs               # 预设数据
+│
+├── PatchReturn/                # 🛑 命令行版（已停止维护）
+│   ├── PatchReturn.csproj
+│   └── Program.cs
+│
+├── PatchReturnUINative/        # 🛑 数字菜单 CMD 版（已停止维护）
+│   ├── PatchReturnUINative.csproj
+│   ├── Program.cs
+│   ├── Patcher.cs
+│   └── Preset.cs
 │
 ├── .gitignore
 ├── LICENSE

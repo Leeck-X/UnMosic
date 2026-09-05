@@ -13,6 +13,7 @@ public class MainForm : Form
     private readonly Button _patchBtn;
     private readonly Button _restoreBtn;
     private readonly Button _clearLogBtn;
+    private readonly Button _scanBtn;
     private readonly Button _openPresetsBtn;
     private readonly TextBox _logBox;
     private readonly ToolStripStatusLabel _statusLabel;
@@ -162,16 +163,20 @@ public class MainForm : Form
         // === 行 4: 留白 ===
         y += RowH + 6;
 
-        // === 行 5: 三个按钮 ===
+        // === 行 5: 四个按钮 ===
+        int bx = inputX;
         _patchBtn = MakeBtn("🔧 修补 DLL", 140, Color.FromArgb(40, 167, 69), Color.White);
-        _patchBtn.Location = new Point(inputX, y);
-        _restoreBtn = MakeBtn("↩ 还原备份", 140, Color.FromArgb(220, 53, 69), Color.White);
-        _restoreBtn.Location = new Point(inputX + 140 + 10, y);
-        _clearLogBtn = MakeBtn("🗑 清空日志", 120, SystemColors.ControlDark, SystemColors.ControlText);
-        _clearLogBtn.Location = new Point(inputX + 290 + 10, y);
+        _patchBtn.Location = new Point(bx, y); bx += 140 + 10;
+        _restoreBtn = MakeBtn("↩ 还原备份", 130, Color.FromArgb(220, 53, 69), Color.White);
+        _restoreBtn.Location = new Point(bx, y); bx += 130 + 10;
+        _clearLogBtn = MakeBtn("🗑 清空日志", 110, SystemColors.ControlDark, SystemColors.ControlText);
+        _clearLogBtn.Location = new Point(bx, y); bx += 110 + 10;
+        _scanBtn = MakeBtn("🔍 扫描文件夹", 130, Color.FromArgb(0, 123, 255), Color.White);
+        _scanBtn.Location = new Point(bx, y);
         _patchBtn.Click += PatchBtn_Click;
         _restoreBtn.Click += RestoreBtn_Click;
         _clearLogBtn.Click += (s, e) => _logBox.Clear();
+        _scanBtn.Click += ScanBtn_Click;
 
         // 顶部输入区总高度
         int topH = y + 44;
@@ -202,7 +207,7 @@ public class MainForm : Form
             lblPreset, _presetCombo, _openPresetsBtn,
             lblFunc, _funcName, lblVal, _valueStr,
             lblType, _typeFilter,
-            _patchBtn, _restoreBtn, _clearLogBtn,
+            _patchBtn, _restoreBtn, _clearLogBtn, _scanBtn,
             _logBox,
             statusStrip,
         });
@@ -220,6 +225,7 @@ public class MainForm : Form
         Log("[*] PatchReturn 已启动 - dnlib (dnSpy 底层库) 内核");
         Log("[*] 步骤: 选 DLL → 选预设(或手填函数名/返回值) → 点修补");
         Log("[*] 预设可编辑: 点'打开 presets.json' 增删改后保存, 重启本工具生效");
+        Log("[*] 批量扫描: 点'🔍 扫描文件夹' 自动识别所有马赛克候选函数");
         Log("");
     }
 
@@ -350,12 +356,197 @@ public class MainForm : Form
         }
     }
 
+    // ---------- 自动扫描 ----------
+    /// <summary>扫描结果记录</summary>
+    public sealed class ScanHit
+    {
+        public string DllPath = "";
+        public string TypeName = "";
+        public string MethodName = "";
+        public string ReturnType = "";
+        public bool IsStatic;
+        public int Score;
+        public string MatchedKeyword = "";
+        public override string ToString() => $"{MethodName} - {TypeName}";
+    }
+
+    /// <summary>马赛克/审查相关关键词(小写比较)</summary>
+    private static readonly string[] _mosaicKeywords =
+    {
+        "mosaic", "censor", "blur", "pixelat", "obscure",
+        "drawgl", "draw_gl", "hider", "hiding",
+        "mask", "coverup", "shade", "steam",
+        "blackbar", "pixe", "fog", "veil"
+    };
+
+    /// <summary>强相关关键词(高分)</summary>
+    private static readonly string[] _strongKeywords =
+    {
+        "mosaic", "censor", "drawglonly", "draw_gl_only",
+        "fndrawmosaic", "drawmosaic", "getmosaicsize",
+        "mosaicshower", "mosaicenabled", "isdrawmosaic"
+    };
+
+    private async void ScanBtn_Click(object? sender, EventArgs e)
+    {
+        using var dlg = new FolderBrowserDialog
+        {
+            Description = "选择游戏目录(会扫描所有 .dll 找候选马赛克函数)",
+            ShowNewFolderButton = false,
+        };
+        if (!string.IsNullOrEmpty(_dllPath.Text))
+            dlg.InitialDirectory = Path.GetDirectoryName(_dllPath.Text) ?? "";
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        string folder = dlg.SelectedPath;
+        bool recurse = MessageBox.Show(this,
+            "递归扫描子目录?(通常游戏 DLL 在 Managed 子目录下,选'是')",
+            "扫描深度", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+
+        Log($"═════════════════ 扫描开始 {DateTime.Now:HH:mm:ss} ═════════════════");
+        Log($"[*] 文件夹: {folder}");
+        Log($"[*] 递归: {recurse}");
+
+        SetBusy(true);
+        _statusLabel.Text = "扫描中... 请等待";
+        _scanBtn.Enabled = false;
+
+        var searchOption = recurse ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+        var hits = new List<ScanHit>();
+        int scanned = 0, failed = 0;
+        var sw = Stopwatch.StartNew();
+
+        try
+        {
+            string[] dlls = await Task.Run(() => Directory.GetFiles(folder, "*.dll", searchOption));
+            Log($"[*] 找到 {dlls.Length} 个 .dll 文件");
+            foreach (var dll in dlls)
+            {
+                string shortName = Path.GetFileName(dll);
+                int cur = ++scanned;
+                await Task.Run(() =>
+                {
+                    try
+                    {
+                        var module = dnlib.DotNet.ModuleDefMD.Load(File.ReadAllBytes(dll));
+                        var localHits = new List<ScanHit>();
+                        foreach (var type in module.GetTypes())
+                        foreach (var m in type.Methods)
+                        {
+                            if (!m.HasBody || m.Body is null) continue;
+                            if (m.ReturnType.FullName == "System.Void") continue;
+                            string mn = m.Name.String ?? "";
+                            if (mn.Length < 3) continue;
+
+                            string mnLower = mn.ToLowerInvariant();
+                            string tnLower = (type.Name.String ?? "").ToLowerInvariant();
+
+                            int score = 0;
+                            string matched = "";
+                            foreach (var k in _strongKeywords)
+                            {
+                                if (mnLower.Contains(k) || tnLower.Contains(k))
+                                { score += 100; matched = k; break; }
+                            }
+                            if (score == 0)
+                            {
+                                foreach (var k in _mosaicKeywords)
+                                {
+                                    if (mnLower.Contains(k) || tnLower.Contains(k))
+                                    { score += 50; matched = k; break; }
+                                }
+                            }
+                            if (score == 0) continue;
+
+                            localHits.Add(new ScanHit
+                            {
+                                DllPath = dll,
+                                TypeName = type.FullName,
+                                MethodName = mn,
+                                ReturnType = m.ReturnType.FullName,
+                                IsStatic = m.IsStatic,
+                                Score = score,
+                                MatchedKeyword = matched
+                            });
+                        }
+                        module.Dispose();
+
+                        lock (hits)
+                        {
+                            hits.AddRange(localHits);
+                            hits.Sort((a, b) => b.Score.CompareTo(a.Score));
+                        }
+                        Log($"[{cur}/{dlls.Length}] {shortName,-50} 匹配 {localHits.Count} 个");
+                    }
+                    catch
+                    {
+                        Interlocked.Increment(ref failed);
+                        Log($"[{cur}/{dlls.Length}] {shortName,-50} 跳过(非.NET/读取失败)");
+                    }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            LogErr("扫描失败: " + ex.Message);
+        }
+
+        sw.Stop();
+        Log("");
+        Log($"═══════════════════════════════════════════");
+        Log($"[*] 扫描完成: 耗时 {sw.Elapsed.TotalSeconds:F1}s, 扫描 {scanned} 个, 失败 {failed} 个");
+        Log($"[*] 共找到 {hits.Count} 个候选函数");
+
+        SetBusy(false);
+        _scanBtn.Enabled = true;
+        _statusLabel.Text = $"扫描完成: {hits.Count} 候选 | 点击结果套用";
+
+        if (hits.Count == 0)
+        {
+            MessageBox.Show(this, "未找到候选函数。", "扫描结果",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        // 弹出结果选择窗体
+        using var sf = new ScanResultForm(hits);
+        sf.Owner = this;
+        if (sf.ShowDialog(this) == DialogResult.OK && sf.Selected is not null)
+        {
+            var hit = sf.Selected;
+            _dllPath.Text = hit.DllPath;
+            _funcName.Text = hit.MethodName;
+            _typeFilter.Text = hit.TypeName;
+
+            // 自动推荐返回值
+            if (string.IsNullOrWhiteSpace(_valueStr.Text))
+            {
+                if (hit.ReturnType == "System.Boolean")
+                {
+                    _valueStr.Text = "false";
+                    Log("[*] 自动填入返回值 false (Boolean)");
+                }
+                else if (hit.ReturnType == "System.Single")
+                {
+                    _valueStr.Text = "0.01f";
+                    Log("[*] 自动填入返回值 0.01f (Single)");
+                }
+            }
+            Log($"[+] 已套用扫描结果: {hit.MethodName} - {hit.TypeName}");
+            Log($"    返回 {hit.ReturnType} 静态={hit.IsStatic} 关键词={hit.MatchedKeyword} 相关度={hit.Score}");
+            _statusLabel.Text = "✓ 已套用扫描结果, 点修补确认";
+            _statusLabel.BackColor = Color.FromArgb(0, 123, 255);
+            _statusLabel.ForeColor = Color.White;
+        }
+    }
+
     // ---------- 辅助 ----------
     private void SetBusy(bool busy)
     {
         _patchBtn.Enabled = !busy;
         _restoreBtn.Enabled = !busy;
         _browseBtn.Enabled = !busy;
+        _scanBtn.Enabled = !busy;
         Cursor = busy ? Cursors.WaitCursor : Cursors.Default;
     }
 
@@ -375,5 +566,109 @@ public class MainForm : Form
         _statusLabel.Text = "提示: " + msg;
         _statusLabel.BackColor = SystemColors.Control;
         _statusLabel.ForeColor = SystemColors.ControlText;
+    }
+}
+
+/// <summary>扫描结果选择窗体</summary>
+internal sealed class ScanResultForm : Form
+{
+    public MainForm.ScanHit? Selected { get; private set; }
+    private readonly ListView _lv;
+    private readonly Button _ok;
+    private readonly Button _cancel;
+
+    public ScanResultForm(List<MainForm.ScanHit> hits)
+    {
+        Text = $"扫描结果: {hits.Count} 个候选 (双击套用)";
+        ClientSize = new Size(820, 460);
+        MinimumSize = new Size(640, 360);
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.Sizable;
+        Font = new Font("Microsoft YaHei UI", 9F);
+
+        _lv = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false,
+            Font = new Font("Consolas", 9F),
+            BackColor = Color.FromArgb(248, 248, 248),
+        };
+        _lv.Columns.Add("★", 24);
+        _lv.Columns.Add("函数名", 200);
+        _lv.Columns.Add("类型", 280);
+        _lv.Columns.Add("返回", 120);
+        _lv.Columns.Add("静态", 50);
+        _lv.Columns.Add("相关度", 60);
+        _lv.Columns.Add("关键词", 120);
+        _lv.Columns.Add("DLL", 220);
+
+        foreach (var h in hits)
+        {
+            var item = new ListViewItem(h.Score >= 100 ? "★" : " ");
+            item.SubItems.Add(h.MethodName);
+            item.SubItems.Add(h.TypeName);
+            item.SubItems.Add(h.ReturnType);
+            item.SubItems.Add(h.IsStatic ? "是" : "否");
+            item.SubItems.Add(h.Score.ToString());
+            item.SubItems.Add(h.MatchedKeyword);
+            item.SubItems.Add(Path.GetFileName(h.DllPath));
+            item.Tag = h;
+            if (h.Score >= 100)
+            {
+                item.BackColor = Color.FromArgb(255, 248, 220);
+                item.ForeColor = Color.FromArgb(180, 90, 0);
+            }
+            _lv.Items.Add(item);
+        }
+        if (_lv.Items.Count > 0) _lv.Items[0].Selected = true;
+        _lv.DoubleClick += (s, e) => { if (_lv.SelectedItems.Count > 0) { Selected = _lv.SelectedItems[0].Tag as MainForm.ScanHit; DialogResult = DialogResult.OK; Close(); } };
+        _lv.SelectedIndexChanged += (s, e) => _ok.Enabled = _lv.SelectedItems.Count > 0;
+
+        // 底部按钮
+        var pnl = new Panel { Dock = DockStyle.Bottom, Height = 36, BackColor = SystemColors.Control };
+        _ok = new Button
+        {
+            Text = "套用所选",
+            Width = 130, Height = 28,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(0, 123, 255),
+            ForeColor = Color.White,
+            Enabled = false,
+        };
+        _ok.FlatAppearance.BorderSize = 0;
+        _cancel = new Button
+        {
+            Text = "取消",
+            Width = 80, Height = 28,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            DialogResult = DialogResult.Cancel,
+            FlatStyle = FlatStyle.Flat,
+        };
+        _cancel.FlatAppearance.BorderSize = 0;
+        pnl.Controls.Add(_ok);
+        pnl.Controls.Add(_cancel);
+        pnl.Layout += (s, e) =>
+        {
+            _cancel.Location = new Point(pnl.ClientSize.Width - _cancel.Width - 12, 4);
+            _ok.Location = new Point(_cancel.Left - _ok.Width - 10, 4);
+        };
+        _ok.Click += (s, e) =>
+        {
+            if (_lv.SelectedItems.Count > 0)
+            {
+                Selected = _lv.SelectedItems[0].Tag as MainForm.ScanHit;
+                DialogResult = DialogResult.OK;
+                Close();
+            }
+        };
+
+        Controls.Add(_lv);
+        Controls.Add(pnl);
+        AcceptButton = _ok;
+        CancelButton = _cancel;
     }
 }
